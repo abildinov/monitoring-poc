@@ -1,0 +1,12 @@
+# Docker data
+loki-data/
+prometheus/data/
+grafana-storage/
+# Python caches
+__pycache__/
+*.pyc
+# Logs and env
+*.log
+.env
+# Backups
+_backup/
