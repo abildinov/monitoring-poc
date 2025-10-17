@@ -4,6 +4,17 @@
 
 import os
 from typing import Optional
+from pathlib import Path
+
+# Загружаем .env файл если он существует
+env_file = Path(__file__).parent / ".env"
+if env_file.exists():
+    with open(env_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                os.environ[key] = value
 
 # Простая конфигурация без pydantic для совместимости
 class Settings:
@@ -26,12 +37,22 @@ class Settings:
         
         # Ollama настройки
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-        self.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")  # Быстрая модель
+        self.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", "300"))  # 5 минут для больших моделей
         
         # Пороговые значения для мониторинга
         self.cpu_threshold = float(os.getenv("CPU_THRESHOLD", "80.0"))
         self.memory_threshold = float(os.getenv("MEMORY_THRESHOLD", "85.0"))
+        self.disk_threshold = float(os.getenv("DISK_THRESHOLD", "90.0"))
+        
+        # Telegram настройки
+        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+        self.telegram_enabled = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+        
+        # Пороги для сетевых метрик
+        self.network_errors_threshold = int(os.getenv("NETWORK_ERRORS_THRESHOLD", "100"))
+        self.network_connections_threshold = int(os.getenv("NETWORK_CONNECTIONS_THRESHOLD", "1000"))
         
         # Валидация настроек
         self._validate()

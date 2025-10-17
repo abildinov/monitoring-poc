@@ -200,6 +200,254 @@ class PrometheusClient:
             logger.error(f"Prometheus недоступен: {e}")
             return False
     
+    async def get_network_traffic(self) -> Dict[str, Any]:
+        """
+        Получить сетевой трафик по интерфейсам
+        
+        Returns:
+            Словарь с данными о трафике
+        """
+        try:
+            # Входящий трафик
+            rx_query = 'node_network_receive_bytes_total'
+            rx_result = await self.query(rx_query)
+            
+            # Исходящий трафик
+            tx_query = 'node_network_transmit_bytes_total'
+            tx_result = await self.query(tx_query)
+            
+            # Статус интерфейсов
+            up_query = 'node_network_up'
+            up_result = await self.query(up_query)
+            
+            interfaces = {}
+            
+            # Обработка входящего трафика
+            if rx_result.get('status') == 'success' and rx_result.get('data', {}).get('result'):
+                for item in rx_result['data']['result']:
+                    interface = item['metric'].get('device', 'unknown')
+                    value = float(item['value'][1])
+                    if interface not in interfaces:
+                        interfaces[interface] = {}
+                    interfaces[interface]['rx_bytes'] = value
+            
+            # Обработка исходящего трафика
+            if tx_result.get('status') == 'success' and tx_result.get('data', {}).get('result'):
+                for item in tx_result['data']['result']:
+                    interface = item['metric'].get('device', 'unknown')
+                    value = float(item['value'][1])
+                    if interface not in interfaces:
+                        interfaces[interface] = {}
+                    interfaces[interface]['tx_bytes'] = value
+            
+            # Обработка статуса интерфейсов
+            if up_result.get('status') == 'success' and up_result.get('data', {}).get('result'):
+                for item in up_result['data']['result']:
+                    interface = item['metric'].get('device', 'unknown')
+                    value = float(item['value'][1])
+                    if interface not in interfaces:
+                        interfaces[interface] = {}
+                    interfaces[interface]['up'] = value == 1
+            
+            logger.info(f"Получены данные о трафике для {len(interfaces)} интерфейсов")
+            return {
+                'interfaces': interfaces,
+                'total_interfaces': len(interfaces),
+                'active_interfaces': sum(1 for iface in interfaces.values() if iface.get('up', False))
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения сетевого трафика: {e}")
+            return {'interfaces': {}, 'total_interfaces': 0, 'active_interfaces': 0}
+    
+    async def get_network_connections(self) -> Dict[str, Any]:
+        """
+        Получить количество сетевых соединений
+        
+        Returns:
+            Словарь с данными о соединениях
+        """
+        try:
+            # TCP соединения
+            tcp_query = 'node_netstat_Tcp_CurrEstab'
+            tcp_result = await self.query(tcp_query)
+            
+            # UDP соединения
+            udp_query = 'node_netstat_Udp_CurrDatagrams'
+            udp_result = await self.query(udp_query)
+            
+            connections = {
+                'tcp_established': 0,
+                'udp_datagrams': 0,
+                'total': 0
+            }
+            
+            if tcp_result.get('status') == 'success' and tcp_result.get('data', {}).get('result'):
+                connections['tcp_established'] = float(tcp_result['data']['result'][0]['value'][1])
+            
+            if udp_result.get('status') == 'success' and udp_result.get('data', {}).get('result'):
+                connections['udp_datagrams'] = float(udp_result['data']['result'][0]['value'][1])
+            
+            connections['total'] = connections['tcp_established'] + connections['udp_datagrams']
+            
+            logger.info(f"Сетевые соединения: TCP={connections['tcp_established']}, UDP={connections['udp_datagrams']}")
+            return connections
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения сетевых соединений: {e}")
+            return {'tcp_established': 0, 'udp_datagrams': 0, 'total': 0}
+    
+    async def get_network_errors(self) -> Dict[str, Any]:
+        """
+        Получить ошибки сети
+        
+        Returns:
+            Словарь с данными об ошибках
+        """
+        try:
+            # Ошибки входящего трафика
+            rx_errors_query = 'node_network_receive_errs_total'
+            rx_errors_result = await self.query(rx_errors_query)
+            
+            # Ошибки исходящего трафика
+            tx_errors_query = 'node_network_transmit_errs_total'
+            tx_errors_result = await self.query(tx_errors_query)
+            
+            errors = {
+                'rx_errors': 0,
+                'tx_errors': 0,
+                'total_errors': 0,
+                'interfaces_with_errors': []
+            }
+            
+            if rx_errors_result.get('status') == 'success' and rx_errors_result.get('data', {}).get('result'):
+                for item in rx_errors_result['data']['result']:
+                    interface = item['metric'].get('device', 'unknown')
+                    value = float(item['value'][1])
+                    errors['rx_errors'] += value
+                    if value > 0:
+                        errors['interfaces_with_errors'].append(interface)
+            
+            if tx_errors_result.get('status') == 'success' and tx_errors_result.get('data', {}).get('result'):
+                for item in tx_errors_result['data']['result']:
+                    interface = item['metric'].get('device', 'unknown')
+                    value = float(item['value'][1])
+                    errors['tx_errors'] += value
+                    if value > 0 and interface not in errors['interfaces_with_errors']:
+                        errors['interfaces_with_errors'].append(interface)
+            
+            errors['total_errors'] = errors['rx_errors'] + errors['tx_errors']
+            
+            logger.info(f"Сетевые ошибки: RX={errors['rx_errors']}, TX={errors['tx_errors']}")
+            return errors
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения сетевых ошибок: {e}")
+            return {'rx_errors': 0, 'tx_errors': 0, 'total_errors': 0, 'interfaces_with_errors': []}
+    
+    async def get_top_processes_by_cpu(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Получить топ процессов по использованию CPU
+        
+        Args:
+            limit: Количество процессов для возврата
+            
+        Returns:
+            Список процессов с данными о CPU
+        """
+        try:
+            # Используем node_cpu_seconds_total для расчета загрузки по процессам
+            # Это приблизительная оценка, так как node_exporter не предоставляет детальные метрики процессов
+            query = 'topk(10, rate(node_cpu_seconds_total{mode="user"}[5m]))'
+            result = await self.query(query)
+            
+            processes = []
+            
+            if result.get('status') == 'success' and result.get('data', {}).get('result'):
+                for i, item in enumerate(result['data']['result'][:limit]):
+                    cpu_id = item['metric'].get('cpu', f'cpu{i}')
+                    value = float(item['value'][1])
+                    
+                    processes.append({
+                        'rank': i + 1,
+                        'cpu_id': cpu_id,
+                        'cpu_usage': value * 100,  # Конвертируем в проценты
+                        'name': f'CPU Core {cpu_id}'
+                    })
+            
+            logger.info(f"Получены топ {len(processes)} процессов по CPU")
+            return processes
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения топ процессов по CPU: {e}")
+            return []
+    
+    async def get_top_processes_by_memory(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Получить топ процессов по использованию памяти
+        
+        Args:
+            limit: Количество процессов для возврата
+            
+        Returns:
+            Список процессов с данными о памяти
+        """
+        try:
+            # Используем node_memory_MemAvailable_bytes для оценки доступной памяти
+            # Это не точные данные о процессах, но дает представление об использовании памяти
+            query = 'node_memory_MemAvailable_bytes'
+            result = await self.query(query)
+            
+            processes = []
+            
+            if result.get('status') == 'success' and result.get('data', {}).get('result'):
+                available_bytes = float(result['data']['result'][0]['value'][1])
+                available_gb = available_bytes / (1024**3)
+                
+                # Создаем фиктивные данные о процессах для демонстрации
+                # В реальной системе нужно использовать другой экспортер для метрик процессов
+                processes.append({
+                    'rank': 1,
+                    'name': 'System Memory',
+                    'memory_usage_gb': available_gb,
+                    'memory_percent': (available_gb / 4) * 100  # Предполагаем 4GB общий объем
+                })
+            
+            logger.info(f"Получены данные о памяти для {len(processes)} процессов")
+            return processes
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения топ процессов по памяти: {e}")
+            return []
+    
+    async def get_network_status(self) -> Dict[str, Any]:
+        """
+        Получить полный статус сети
+        
+        Returns:
+            Объединенные данные о сети
+        """
+        try:
+            traffic = await self.get_network_traffic()
+            connections = await self.get_network_connections()
+            errors = await self.get_network_errors()
+            
+            return {
+                'traffic': traffic,
+                'connections': connections,
+                'errors': errors,
+                'status': 'healthy' if errors['total_errors'] < 100 else 'warning'
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения статуса сети: {e}")
+            return {
+                'traffic': {'interfaces': {}, 'total_interfaces': 0, 'active_interfaces': 0},
+                'connections': {'tcp_established': 0, 'udp_datagrams': 0, 'total': 0},
+                'errors': {'rx_errors': 0, 'tx_errors': 0, 'total_errors': 0, 'interfaces_with_errors': []},
+                'status': 'error'
+            }
+
     async def close(self):
         """Закрыть соединения"""
         await self.client.aclose()

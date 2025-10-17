@@ -143,6 +143,128 @@ class MonitoringChat:
 """
         return status
     
+    async def get_network_info(self) -> str:
+        """Получить информацию о сети"""
+        try:
+            network_data = await self.prometheus.get_network_status()
+            
+            result = "Network Status:\n"
+            result += f"Status: {network_data['status'].upper()}\n\n"
+            
+            # Трафик
+            traffic = network_data['traffic']
+            result += f"Traffic:\n"
+            result += f"  Total interfaces: {traffic['total_interfaces']}\n"
+            result += f"  Active interfaces: {traffic['active_interfaces']}\n"
+            
+            for interface, data in traffic['interfaces'].items():
+                rx_gb = data.get('rx_bytes', 0) / (1024**3)
+                tx_gb = data.get('tx_bytes', 0) / (1024**3)
+                status = "UP" if data.get('up', False) else "DOWN"
+                result += f"  {interface}: RX={rx_gb:.2f}GB, TX={tx_gb:.2f}GB [{status}]\n"
+            
+            # Соединения
+            connections = network_data['connections']
+            result += f"\nConnections:\n"
+            result += f"  TCP established: {connections['tcp_established']}\n"
+            result += f"  UDP datagrams: {connections['udp_datagrams']}\n"
+            result += f"  Total: {connections['total']}\n"
+            
+            # Ошибки
+            errors = network_data['errors']
+            result += f"\nErrors:\n"
+            result += f"  RX errors: {errors['rx_errors']}\n"
+            result += f"  TX errors: {errors['tx_errors']}\n"
+            result += f"  Total errors: {errors['total_errors']}\n"
+            
+            if errors['interfaces_with_errors']:
+                result += f"  Interfaces with errors: {', '.join(errors['interfaces_with_errors'])}\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"Ошибка получения информации о сети: {e}"
+    
+    async def get_processes_info(self) -> str:
+        """Получить информацию о процессах"""
+        try:
+            cpu_processes = await self.prometheus.get_top_processes_by_cpu(10)
+            memory_processes = await self.prometheus.get_top_processes_by_memory(10)
+            
+            result = "Top Processes:\n\n"
+            
+            # CPU процессы
+            result += "CPU Usage:\n"
+            if cpu_processes:
+                for process in cpu_processes:
+                    result += f"  {process['rank']}. {process['name']}: {process['cpu_usage']:.2f}%\n"
+            else:
+                result += "  No CPU process data available\n"
+            
+            # Memory процессы
+            result += "\nMemory Usage:\n"
+            if memory_processes:
+                for process in memory_processes:
+                    result += f"  {process['rank']}. {process['name']}: {process['memory_usage_gb']:.2f}GB ({process['memory_percent']:.1f}%)\n"
+            else:
+                result += "  No memory process data available\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"Ошибка получения информации о процессах: {e}"
+    
+    async def get_alerts_info(self) -> str:
+        """Получить информацию об алертах"""
+        try:
+            # Инициализируем AlertManager если еще не инициализирован
+            if not hasattr(self, 'alert_manager'):
+                from alerts.alert_manager import AlertManager
+                self.alert_manager = AlertManager()
+            
+            # Получаем активные алерты
+            active_alerts = self.alert_manager.get_active_alerts()
+            
+            result = "Active Alerts:\n"
+            
+            if not active_alerts:
+                result += "  No active alerts\n"
+            else:
+                result += f"  Total active alerts: {len(active_alerts)}\n\n"
+                
+                for alert in active_alerts:
+                    severity_emoji = {
+                        'critical': '🚨',
+                        'warning': '⚠️',
+                        'info': 'ℹ️'
+                    }
+                    emoji = severity_emoji.get(alert.severity, '📢')
+                    
+                    time_str = alert.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                    result += f"  {emoji} {alert.name} ({alert.severity.upper()})\n"
+                    result += f"    Message: {alert.message}\n"
+                    result += f"    Metric: {alert.metric_name}\n"
+                    result += f"    Current: {alert.current_value:.2f}\n"
+                    result += f"    Threshold: {alert.threshold}\n"
+                    result += f"    Time: {time_str}\n\n"
+            
+            # Статистика
+            stats = self.alert_manager.get_stats()
+            result += f"Statistics:\n"
+            result += f"  Active alerts: {stats['active_alerts']}\n"
+            result += f"  Total history: {stats['total_history']}\n"
+            result += f"  Rules count: {stats['rules_count']}\n"
+            
+            if stats['severity_breakdown']:
+                result += f"  Severity breakdown:\n"
+                for severity, count in stats['severity_breakdown'].items():
+                    result += f"    {severity}: {count}\n"
+            
+            return result
+            
+        except Exception as e:
+            return f"Ошибка получения информации об алертах: {e}"
+    
     async def ask_llm(self, question: str, include_metrics: bool = True):
         """Задать вопрос LLM с контекстом метрик"""
         
@@ -168,6 +290,8 @@ class MonitoringChat:
         # Формируем системный промпт
         system_prompt = """Ты - помощник по мониторингу серверной инфраструктуры.
 У тебя есть доступ к метрикам сервера через Prometheus и логам через Loki.
+
+ВАЖНО: Отвечай ТОЛЬКО на русском языке. Никогда не используй английский язык в ответах.
 Отвечай кратко, понятно, на русском языке.
 Если видишь проблемы - указывай их и давай рекомендации."""
         
@@ -204,6 +328,9 @@ class MonitoringChat:
             print("  /memory    - Показать использование памяти")
             print("  /disk      - Показать использование дисков")
             print("  /logs      - Показать последние ошибки")
+            print("  /network   - Показать статус сети")
+            print("  /processes - Показать топ процессов")
+            print("  /alerts    - Показать активные алерты")
             print("  /status    - Полный статус системы")
             print("  /help      - Эта справка")
             print("  /exit      - Выход")
@@ -226,6 +353,21 @@ class MonitoringChat:
         
         elif command == "/logs":
             result = await self.get_logs_info()
+            print(f"\n{result}\n")
+            return
+        
+        elif command == "/network":
+            result = await self.get_network_info()
+            print(f"\n{result}\n")
+            return
+        
+        elif command == "/processes":
+            result = await self.get_processes_info()
+            print(f"\n{result}\n")
+            return
+        
+        elif command == "/alerts":
+            result = await self.get_alerts_info()
             print(f"\n{result}\n")
             return
         
